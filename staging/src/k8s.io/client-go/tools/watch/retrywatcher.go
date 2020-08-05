@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 )
 
 // resourceVersionGetter is an interface used to get resource version from events.
@@ -48,6 +49,7 @@ type resourceVersionGetter interface {
 // Please note that this is not resilient to etcd cache not having the resource version anymore - you would need to
 // use Informers for that.
 type RetryWatcher struct {
+	clk                 clock.Clock
 	lastResourceVersion string
 	watcherClient       cache.Watcher
 	resultChan          chan watch.Event
@@ -74,6 +76,7 @@ func newRetryWatcher(initialResourceVersion string, watcherClient cache.Watcher,
 	}
 
 	rw := &RetryWatcher{
+		clk:                 clock.RealClock{},
 		lastResourceVersion: initialResourceVersion,
 		watcherClient:       watcherClient,
 		stopChan:            make(chan struct{}),
@@ -268,7 +271,13 @@ func (rw *RetryWatcher) receive() {
 			return
 		}
 
-		time.Sleep(retryAfter)
+		timer := rw.clk.NewTimer(retryAfter)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C():
+		}
 
 		klog.V(4).Infof("Restarting RetryWatcher at RV=%q", rw.lastResourceVersion)
 	}, rw.minRestartDelay)
